@@ -35,27 +35,30 @@ app.post("/categories", async (req, res) => {
 	try {
 		const newCategory = req.body;
 
-		const categories = await connection.query(`SELECT * FROM categories;`).rows;
+		if (!newCategory || !newCategory.name) {
+			res.sendStatus(400);
+			return;
+		}
 
-		const thisCategoryExists = !categories.find((category) => {
-			category.name === newCategory.name;
-		});
+		const existentCategory = await connection.query(
+			`SELECT * FROM categories WHERE name = $1;`,
+			[newCategory.name]
+		);
 
-		if (newCategory && !thisCategoryExists) {
+		const categoryExists = existentCategory.rowCount !== 0;
+
+		if (categoryExists) {
+			res.sendStatus(409);
+			return;
+		}
+
+		if (newCategory) {
 			await connection.query(`INSERT INTO categories (name) VALUES ($1);`, [
 				newCategory.name,
 			]);
 			res.sendStatus(201);
 		}
 	} catch (err) {
-		if (!newCategory) {
-			res.sendStatus(400);
-			return;
-		}
-		if (thisCategoryExists) {
-			res.sendStatus(409);
-			return;
-		}
 		res.sendStatus(500);
 	}
 });
