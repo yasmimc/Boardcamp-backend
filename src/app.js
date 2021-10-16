@@ -1,4 +1,4 @@
-import express, { response } from "express";
+import express from "express";
 import cors from "cors";
 import pg from "pg";
 
@@ -34,11 +34,28 @@ app.get("/categories", async (req, res) => {
 app.post("/categories", async (req, res) => {
 	try {
 		const newCategory = req.body;
-		await connection.query(`INSERT INTO categories (name) VALUES ($1);`, [
-			newCategory.name,
-		]);
-		res.sendStatus(201);
+
+		const categories = await connection.query(`SELECT * FROM categories;`).rows;
+
+		const thisCategoryExists = !categories.find((category) => {
+			category.name === newCategory.name;
+		});
+
+		if (newCategory && !thisCategoryExists) {
+			await connection.query(`INSERT INTO categories (name) VALUES ($1);`, [
+				newCategory.name,
+			]);
+			res.sendStatus(201);
+		}
 	} catch (err) {
+		if (!newCategory) {
+			res.sendStatus(400);
+			return;
+		}
+		if (thisCategoryExists) {
+			res.sendStatus(409);
+			return;
+		}
 		res.sendStatus(500);
 	}
 });
