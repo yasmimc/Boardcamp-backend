@@ -26,10 +26,10 @@ const categoriesSchema = joi.object({
 
 const gamesSchema = joi.object({
 	name: joi.string().required(),
-	image: joi.string().required(),
-	stockTotal: joi.number().integer(),
+	image: joi.string(),
+	stockTotal: joi.number().integer().greater(0).required(),
 	categoryId: joi.number().integer(),
-	pricePerDay: joi.number().integer(),
+	pricePerDay: joi.number().integer().greater(0).required(),
 });
 
 const customersSchema = joi.object({
@@ -42,7 +42,7 @@ const customersSchema = joi.object({
 const rentalsSchema = joi.object({
 	customerId: joi.number().integer(),
 	gameId: joi.number().integer(),
-	daysRented: joi.number().integer(),
+	daysRented: joi.number().integer().greater(0),
 });
 
 const app = express();
@@ -120,6 +120,7 @@ app.post("/games", async (req, res) => {
 	try {
 		const newGame = req.body;
 		const validation = gamesSchema.validate(newGame);
+
 		if (validation.error) {
 			res.sendStatus(400);
 			return;
@@ -132,10 +133,7 @@ app.post("/games", async (req, res) => {
 			categoryId
 		);
 
-		const newGameIsValid =
-			name && stockTotal > 0 && pricePerDay > 0 && categoryExists;
-
-		if (!newGameIsValid) {
+		if (!categoryExists) {
 			res.sendStatus(400);
 			return;
 		}
@@ -149,7 +147,7 @@ app.post("/games", async (req, res) => {
 
 		await connection.query(
 			`INSERT INTO games (name, image, "stockTotal", "categoryId", "pricePerDay") VALUES ($1, $2, $3, $4, $5)`,
-			[name, image, stockTotal, categoryId, pricePerDay]
+			[name, image ? image : "", stockTotal, categoryId, pricePerDay]
 		);
 		res.sendStatus(201);
 	} catch (error) {
@@ -377,9 +375,8 @@ app.post("/rentals", async (req, res) => {
 			customerId
 		));
 		const gameExists = !!(await dataAlredyExists("games", "id", gameId));
-		const daysRentedIsValid = daysRented > 0;
 
-		if (!customerExists || !gameExists || !daysRentedIsValid) {
+		if (!customerExists || !gameExists) {
 			res.sendStatus(400);
 			return;
 		}
@@ -457,7 +454,18 @@ app.post("/rentals/:id/return", async (req, res) => {
 		}
 
 		const rental = (
-			await connection.query(`SELECT * FROM rentals WHERE id = $1`, [rentalId])
+			await connection.query(
+				`SELECT 
+					rentals."rentDate", 
+					rentals."daysRented", 
+					rentals."returnDate",
+					games."pricePerDay"
+				FROM rentals 
+				JOIN games 
+					ON rentals."gameId" = games.id
+				WHERE rentals.id = $1 `,
+				[rentalId]
+			)
 		).rows[0];
 
 		if (rental.returnDate) {
@@ -470,9 +478,7 @@ app.post("/rentals/:id/return", async (req, res) => {
 
 		const delay =
 			rentPeriod > rental.daysRented ? rentPeriod - rental.daysRented : null;
-		const delayFee = delay
-			? (rental.originalPrice / rental.daysRented) * delay
-			: null;
+		const delayFee = delay ? rental.pricePerDay * delay : null;
 
 		await connection.query(
 			`UPDATE rentals 
