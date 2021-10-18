@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import pg from "pg";
+import dayjs from "dayjs";
 
 const { Pool } = pg;
 
@@ -239,6 +240,229 @@ app.put("/customers/:id", async (req, res) => {
 	}
 });
 
+// ------------------------------ * RENTALS CRUD *------------------------------
+
+app.get("/rentals", async (req, res) => {
+	try {
+		const customerId = req.query.customerId;
+		if (customerId) {
+			const result = await connection.query(
+				`SELECT 
+					rentals.*,
+					customers.name AS "customerName",
+					games.name AS "gameName", 
+					games."categoryId" AS "gameCategoryId",
+					categories.name AS "gameCategoryName"
+				FROM rentals 
+				JOIN customers
+					ON  rentals."customerId" = customers.id
+				JOIN games 
+					ON rentals."gameId" = games.id 
+				JOIN categories 
+					ON games."categoryId" = categories.id
+				WHERE "customerId" = $1`,
+				[customerId]
+			);
+			const rental = result.rows[0];
+			res.send(rentalObj(rental));
+			return;
+		}
+
+		const gameId = req.query.gameId;
+		if (gameId) {
+			const result = await connection.query(
+				`SELECT 
+					rentals.*,
+					customers.name AS "customerName",
+					games.name AS "gameName", 
+					games."categoryId" AS "gameCategoryId",
+					categories.name AS "gameCategoryName"
+				FROM rentals 
+				JOIN customers
+					ON  rentals."customerId" = customers.id
+				JOIN games 
+					ON rentals."gameId" = games.id 
+				JOIN categories 
+					ON games."categoryId" = categories.id
+				WHERE "gameId" = $1`,
+				[gameId]
+			);
+			const rental = result.rows[0];
+			res.send(rentalObj(rental));
+			return;
+		}
+
+		const result = await connection.query(
+			`SELECT 
+				rentals.*,
+				customers.name AS "customerName",
+				games.name AS "gameName", 
+				games."categoryId" AS "gameCategoryId",
+				categories.name AS "gameCategoryName"
+			FROM rentals 
+			JOIN customers
+				ON  rentals."customerId" = customers.id
+			JOIN games 
+				ON rentals."gameId" = games.id 
+			JOIN categories 
+				ON games."categoryId" = categories.id`
+		);
+		const rentals = result.rows.map((rental) => {
+			return rentalObj(rental);
+		});
+		res.send(rentals);
+	} catch (error) {
+		res.sendStatus(500);
+	}
+});
+
+app.post("/rentals", async (req, res) => {
+	try {
+		const { customerId, gameId, daysRented } = req.body;
+
+		const customerExists = !!(await dataAlredyExists(
+			"customers",
+			"id",
+			customerId
+		));
+		const gameExists = !!(await dataAlredyExists("games", "id", gameId));
+		const daysRentedIsValid = daysRented > 0;
+
+		if (!customerExists || !gameExists || !daysRentedIsValid) {
+			res.sendStatus(400);
+			return;
+		}
+
+		const game = (
+			await connection.query(`SELECT * FROM games WHERE id = $1`, [gameId])
+		).rows[0];
+
+		const openRents = (
+			await connection.query(
+				`SELECT * from rentals WHERE "gameId" = $1 AND "returnDate" IS NULL`,
+				[gameId]
+			)
+		).rowCount;
+
+		const gameIsAvailable = openRents < game.stockTotal;
+
+		if (!gameIsAvailable) {
+			res.sendStatus(400);
+			return;
+		}
+
+		const today = dayjs().format("YYYY-MM-DD");
+
+		const originalPrice = game.pricePerDay * daysRented;
+
+		const newRent = {
+			customerId,
+			gameId,
+			daysRented,
+			rentDate: today,
+			returnDate: null,
+			originalPrice,
+			delayFee: null,
+		};
+
+		const { rentDate, returnDate, delayFee } = newRent;
+
+		await connection.query(
+			`INSERT INTO rentals (
+				"customerId",
+				"gameId",
+				"daysRented",
+				"rentDate",
+				"returnDate",
+				"originalPrice",
+				"delayFee"
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			[
+				customerId,
+				gameId,
+				daysRented,
+				rentDate,
+				returnDate,
+				originalPrice,
+				delayFee,
+			]
+		);
+
+		res.sendStatus(201);
+	} catch (error) {
+		res.sendStatus(500);
+	}
+});
+
+app.post("/rentals/:id/return", async (req, res) => {
+	try {
+		//nao pode devolver de novo, tem q implementar ainda
+		const rentalId = req.params.id;
+
+		const rentalExists = await dataAlredyExists("rentals", "id", rentalId);
+
+		if (!rentalExists) {
+			res.sendStatus(404);
+			return;
+		}
+
+		const rental = (
+			await connection.query(`SELECT * FROM rentals WHERE id = $1`, [rentalId])
+		).rows[0];
+
+		if (rental.returnDate) {
+			res.sendStatus(400);
+			return;
+		}
+
+		const today = dayjs().format("YYYY-MM-DD");
+		const rentPeriod = dayjs().diff(rental.rentDate, "days");
+
+		const delay =
+			rentPeriod > rental.daysRented ? rentPeriod - rental.daysRented : null;
+		const delayFee = delay
+			? (rental.originalPrice / rental.daysRented) * delay
+			: null;
+
+		await connection.query(
+			`UPDATE rentals 
+				SET 
+				"returnDate" = $1, 
+				"delayFee" = $2 
+			WHERE id = $3`,
+			[today, delayFee, rentalId]
+		);
+		res.sendStatus(200);
+	} catch (error) {
+		res.sendStatus(500);
+	}
+});
+
+app.delete("/rentals/:id", async (req, res) => {
+	try {
+		const rentalId = req.params.id;
+		const rentalExists = await dataAlredyExists("rentals", "id", rentalId);
+		if (!rentalExists) {
+			res.sendStatus(404);
+			return;
+		}
+		const rentalReturnDate = (
+			await connection.query(`SELECT "returnDate" FROM rentals WHERE id = $1`, [
+				rentalId,
+			])
+		).rows[0].returnDate;
+
+		if (rentalReturnDate) {
+			res.sendStatus(400);
+			return;
+		}
+		connection.query(`DELETE FROM rentals WHERE id = $1`, [rentalId]);
+		res.sendStatus(200);
+	} catch (error) {
+		res.sendStatus(500);
+	}
+});
+
 app.listen(4000);
 
 async function dataAlredyExists(table, columnName, value) {
@@ -269,4 +493,31 @@ function customerIsValid(newCustomer) {
 		dateIsValid(birthday);
 
 	return newCustomerIsValid;
+}
+
+function rentalObj(rental) {
+	const rentDate = dayjs(rental.rentDate).format("YYYY-MM-DD");
+	const returnDate = rental.returnDate
+		? dayjs(rental.returnDate).format("YYYY-MM-DD")
+		: null;
+	return {
+		id: rental.id,
+		customerId: rental.customerId,
+		gameId: rental.gameId,
+		rentDate,
+		daysRented: rental.daysRented,
+		returnDate,
+		originalPrice: rental.originalPrice,
+		delayFee: rental.delayFee,
+		customer: {
+			id: rental.customerId,
+			name: rental.customerName,
+		},
+		game: {
+			id: rental.gameId,
+			name: rental.gameName,
+			categoryId: rental.gameCategoryId,
+			categoryName: rental.gameCategoryName,
+		},
+	};
 }
