@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import pg from "pg";
 import dayjs from "dayjs";
+import joi from "joi";
 
 const { Pool } = pg;
 
@@ -17,6 +18,31 @@ const connection = new Pool({
 	host,
 	port,
 	database,
+});
+
+const categoriesSchema = joi.object({
+	name: joi.string().required(),
+});
+
+const gamesSchema = joi.object({
+	name: joi.string().required(),
+	image: joi.string().required(),
+	stockTotal: joi.number().integer(),
+	categoryId: joi.number().integer(),
+	pricePerDay: joi.number().integer(),
+});
+
+const customersSchema = joi.object({
+	name: joi.string().alphanum().min(3).max(30).required(),
+	phone: joi.string().required(),
+	cpf: joi.string().required(),
+	birthday: joi.date().less("now"),
+});
+
+const rentalsSchema = joi.object({
+	customerId: joi.number().integer(),
+	gameId: joi.number().integer(),
+	daysRented: joi.number().integer(),
 });
 
 const app = express();
@@ -37,6 +63,11 @@ app.get("/categories", async (req, res) => {
 app.post("/categories", async (req, res) => {
 	try {
 		const newCategory = req.body;
+		const validation = categoriesSchema.validate(newCategory);
+		if (validation.error) {
+			res.sendStatus(400);
+			return;
+		}
 
 		if (!newCategory || !newCategory.name) {
 			res.sendStatus(400);
@@ -88,6 +119,11 @@ app.get("/games", async (req, res) => {
 app.post("/games", async (req, res) => {
 	try {
 		const newGame = req.body;
+		const validation = gamesSchema.validate(newGame);
+		if (validation.error) {
+			res.sendStatus(400);
+			return;
+		}
 		const { name, image, stockTotal, categoryId, pricePerDay } = newGame;
 
 		const categoryExists = await dataAlredyExists(
@@ -164,6 +200,11 @@ app.get("/customers/:id", async (req, res) => {
 app.post("/customers", async (req, res) => {
 	try {
 		const newCustomer = req.body;
+		const validation = customersSchema.validate(newCustomer);
+		if (validation.error) {
+			res.sendStatus(400);
+			return;
+		}
 		const { name, phone, cpf, birthday } = newCustomer;
 
 		if (!customerIsValid(newCustomer)) {
@@ -204,6 +245,11 @@ app.put("/customers/:id", async (req, res) => {
 		}
 
 		const updatedCustomer = req.body;
+		const validation = customersSchema.validate(updatedCustomer);
+		if (validation.error) {
+			res.sendStatus(400);
+			return;
+		}
 		const { name, phone, cpf, birthday } = updatedCustomer;
 
 		if (!customerIsValid(updatedCustomer)) {
@@ -318,6 +364,11 @@ app.get("/rentals", async (req, res) => {
 
 app.post("/rentals", async (req, res) => {
 	try {
+		const validation = rentalsSchema.validate(req.body);
+		if (validation.error) {
+			res.sendStatus(400);
+			return;
+		}
 		const { customerId, gameId, daysRented } = req.body;
 
 		const customerExists = !!(await dataAlredyExists(
@@ -355,7 +406,7 @@ app.post("/rentals", async (req, res) => {
 
 		const originalPrice = game.pricePerDay * daysRented;
 
-		const newRent = {
+		const newRental = {
 			customerId,
 			gameId,
 			daysRented,
@@ -365,7 +416,7 @@ app.post("/rentals", async (req, res) => {
 			delayFee: null,
 		};
 
-		const { rentDate, returnDate, delayFee } = newRent;
+		const { rentDate, returnDate, delayFee } = newRental;
 
 		await connection.query(
 			`INSERT INTO rentals (
@@ -396,7 +447,6 @@ app.post("/rentals", async (req, res) => {
 
 app.post("/rentals/:id/return", async (req, res) => {
 	try {
-		//nao pode devolver de novo, tem q implementar ainda
 		const rentalId = req.params.id;
 
 		const rentalExists = await dataAlredyExists("rentals", "id", rentalId);
