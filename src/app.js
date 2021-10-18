@@ -33,7 +33,7 @@ const gamesSchema = joi.object({
 });
 
 const customersSchema = joi.object({
-	name: joi.string().alphanum().min(3).max(30).required(),
+	name: joi.string().min(3).max(30).required(),
 	phone: joi.string().required(),
 	cpf: joi.string().required(),
 	birthday: joi.date().less("now"),
@@ -53,8 +53,9 @@ app.use(express.json());
 
 app.get("/categories", async (req, res) => {
 	try {
-		const result = await connection.query(`SELECT * FROM categories;`);
-		res.status(200).send(result.rows);
+		const categories = (await connection.query(`SELECT * FROM categories;`))
+			.rows;
+		res.status(200).send(categories);
 	} catch (error) {
 		res.sendStatus(500);
 	}
@@ -65,11 +66,6 @@ app.post("/categories", async (req, res) => {
 		const newCategory = req.body;
 		const validation = categoriesSchema.validate(newCategory);
 		if (validation.error) {
-			res.sendStatus(400);
-			return;
-		}
-
-		if (!newCategory || !newCategory.name) {
 			res.sendStatus(400);
 			return;
 		}
@@ -85,12 +81,10 @@ app.post("/categories", async (req, res) => {
 			return;
 		}
 
-		if (newCategory) {
-			await connection.query(`INSERT INTO categories (name) VALUES ($1);`, [
-				newCategory.name,
-			]);
-			res.sendStatus(201);
-		}
+		await connection.query(`INSERT INTO categories (name) VALUES ($1);`, [
+			newCategory.name,
+		]);
+		res.sendStatus(201);
 	} catch (error) {
 		res.sendStatus(500);
 	}
@@ -102,15 +96,17 @@ app.get("/games", async (req, res) => {
 	try {
 		const name = req.query.name;
 		if (name) {
-			const result = await connection.query(
-				`SELECT * FROM games WHERE name ~*$1;`,
-				[name]
-			);
-			res.status(200).send(result.rows);
+			const filteredGames = (
+				await connection.query(
+					`SELECT * FROM games WHERE UPPER (name) LIKE UPPER ($1);`,
+					[`${name}%`]
+				)
+			).rows;
+			res.status(200).send(filteredGames);
 			return;
 		}
-		const result = await connection.query(`SELECT * FROM games`);
-		res.status(200).send(result.rows);
+		const games = (await connection.query(`SELECT * FROM games`)).rows;
+		res.status(200).send(games);
 	} catch (error) {
 		res.sendStatus(500);
 	}
@@ -146,7 +142,9 @@ app.post("/games", async (req, res) => {
 		}
 
 		await connection.query(
-			`INSERT INTO games (name, image, "stockTotal", "categoryId", "pricePerDay") VALUES ($1, $2, $3, $4, $5)`,
+			`INSERT 
+				INTO games (name, image, "stockTotal", "categoryId", "pricePerDay") 
+				VALUES ($1, $2, $3, $4, $5)`,
 			[name, image ? image : "", stockTotal, categoryId, pricePerDay]
 		);
 		res.sendStatus(201);
@@ -161,16 +159,17 @@ app.get("/customers", async (req, res) => {
 	try {
 		const cpf = req.query.cpf;
 		if (cpf) {
-			const result = await connection.query(
-				`SELECT * FROM customers WHERE cpf = $1`,
-				[cpf]
-			);
-			res.status(200).send(result.rows);
+			const filteredCustomers = (
+				await connection.query(`SELECT * FROM customers WHERE cpf LIKE $1`, [
+					`${cpf}%`,
+				])
+			).rows;
+			res.status(200).send(filteredCustomers);
 			return;
 		}
 
-		const result = await connection.query(`SELECT * FROM customers`);
-		res.status(200).send(result.rows);
+		const customers = (await connection.query(`SELECT * FROM customers`)).rows;
+		res.status(200).send(customers);
 	} catch (error) {
 		res.sendStatus(500);
 	}
@@ -179,17 +178,18 @@ app.get("/customers", async (req, res) => {
 app.get("/customers/:id", async (req, res) => {
 	try {
 		const customerId = req.params.id;
-		const result = await connection.query(
-			`SELECT * FROM customers WHERE id = $1`,
-			[customerId]
-		);
+		const customer = (
+			await connection.query(`SELECT * FROM customers WHERE id = $1`, [
+				customerId,
+			])
+		).rows[0];
 
-		if (result.rowCount === 0) {
+		if (!customer) {
 			res.sendStatus(404);
 			return;
 		}
 
-		res.status(200).send(result.rows);
+		res.status(200).send(customer);
 	} catch (error) {
 		res.sendStatus(500);
 	}
@@ -203,12 +203,14 @@ app.post("/customers", async (req, res) => {
 			res.sendStatus(400);
 			return;
 		}
-		const { name, phone, cpf, birthday } = newCustomer;
 
 		if (!customerIsValid(newCustomer)) {
 			res.sendStatus(400);
 			return;
 		}
+
+		const { name, phone, cpf, birthday } = newCustomer;
+
 		const customerAlredyExists = await dataAlredyExists(
 			"customers",
 			"cpf",
@@ -248,12 +250,14 @@ app.put("/customers/:id", async (req, res) => {
 			res.sendStatus(400);
 			return;
 		}
-		const { name, phone, cpf, birthday } = updatedCustomer;
 
 		if (!customerIsValid(updatedCustomer)) {
 			res.sendStatus(400);
 			return;
 		}
+
+		const { name, phone, cpf, birthday } = updatedCustomer;
+
 		const updatedCustomerAlredyExists = await dataAlredyExists(
 			"customers",
 			"cpf",
@@ -262,12 +266,13 @@ app.put("/customers/:id", async (req, res) => {
 
 		const thisIsAnotherCustomerCpf =
 			updatedCustomerAlredyExists &&
-			updatedCustomerAlredyExists.id !== customerId;
+			updatedCustomerAlredyExists.id !== updatedCustomer.id;
 
 		if (thisIsAnotherCustomerCpf) {
 			res.sendStatus(409);
 			return;
 		}
+
 		await connection.query(
 			`UPDATE customers SET 
 				name = $1,
@@ -290,8 +295,9 @@ app.get("/rentals", async (req, res) => {
 	try {
 		const customerId = req.query.customerId;
 		if (customerId) {
-			const result = await connection.query(
-				`SELECT 
+			const result = (
+				await connection.query(
+					`SELECT 
 					rentals.*,
 					customers.name AS "customerName",
 					games.name AS "gameName", 
@@ -305,17 +311,21 @@ app.get("/rentals", async (req, res) => {
 				JOIN categories 
 					ON games."categoryId" = categories.id
 				WHERE "customerId" = $1`,
-				[customerId]
-			);
-			const rental = result.rows[0];
-			res.send(rentalObj(rental));
+					[customerId]
+				)
+			).rows;
+			const rentals = result.map((rental) => {
+				return rentalObj(rental);
+			});
+			res.send(rentals);
 			return;
 		}
 
 		const gameId = req.query.gameId;
 		if (gameId) {
-			const result = await connection.query(
-				`SELECT 
+			const result = (
+				await connection.query(
+					`SELECT 
 					rentals.*,
 					customers.name AS "customerName",
 					games.name AS "gameName", 
@@ -329,15 +339,19 @@ app.get("/rentals", async (req, res) => {
 				JOIN categories 
 					ON games."categoryId" = categories.id
 				WHERE "gameId" = $1`,
-				[gameId]
-			);
-			const rental = result.rows[0];
-			res.send(rentalObj(rental));
+					[gameId]
+				)
+			).rows;
+			const rentalsFilteredByGame = result.map((rental) => {
+				return rentalObj(rental);
+			});
+			res.send(rentalsFilteredByGame);
 			return;
 		}
 
-		const result = await connection.query(
-			`SELECT 
+		const result = (
+			await connection.query(
+				`SELECT 
 				rentals.*,
 				customers.name AS "customerName",
 				games.name AS "gameName", 
@@ -350,8 +364,9 @@ app.get("/rentals", async (req, res) => {
 				ON rentals."gameId" = games.id 
 			JOIN categories 
 				ON games."categoryId" = categories.id`
-		);
-		const rentals = result.rows.map((rental) => {
+			)
+		).rows;
+		const rentals = result.map((rental) => {
 			return rentalObj(rental);
 		});
 		res.send(rentals);
@@ -369,21 +384,21 @@ app.post("/rentals", async (req, res) => {
 		}
 		const { customerId, gameId, daysRented } = req.body;
 
-		const customerExists = !!(await dataAlredyExists(
+		const customerExists = await dataAlredyExists(
 			"customers",
 			"id",
 			customerId
-		));
-		const gameExists = !!(await dataAlredyExists("games", "id", gameId));
-
-		if (!customerExists || !gameExists) {
+		);
+		if (!customerExists) {
 			res.sendStatus(400);
 			return;
 		}
 
-		const game = (
-			await connection.query(`SELECT * FROM games WHERE id = $1`, [gameId])
-		).rows[0];
+		const gameExists = await dataAlredyExists("games", "id", gameId);
+		if (!gameExists) {
+			res.sendStatus(400);
+			return;
+		}
 
 		const openRents = (
 			await connection.query(
@@ -391,6 +406,10 @@ app.post("/rentals", async (req, res) => {
 				[gameId]
 			)
 		).rowCount;
+
+		const game = (
+			await connection.query(`SELECT * FROM games WHERE id = $1`, [gameId])
+		).rows[0];
 
 		const gameIsAvailable = openRents < game.stockTotal;
 
